@@ -1,0 +1,98 @@
+name: Real-Time Chat & Channels CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - 'phase-*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backend-verification:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: realtime_chat_test
+          POSTGRES_USER: chat_user
+          POSTGRES_PASSWORD: chat_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify Django settings & static checks
+        env:
+          DATABASE_URL: postgres://chat_user:chat_password@localhost:5432/realtime_chat_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-ci-secret-key-for-django-channels-32-chars-min
+        run: |
+          python manage.py check
+
+      - name: Run Pytest test suite with coverage
+        env:
+          DATABASE_URL: postgres://chat_user:chat_password@localhost:5432/realtime_chat_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-ci-secret-key-for-django-channels-32-chars-min
+        run: |
+          python manage.py makemigrations accounts chat notifications
+          python manage.py migrate
+          pytest --cov=apps --cov-report=term-missing
+
+  frontend-verification:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package.json
+
+      - name: Install frontend dependencies
+        run: npm ci || npm install
+
+      - name: Build frontend bundle & TypeScript check
+        run: npm run build
